@@ -24,6 +24,12 @@ struct AnimationIndices {
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
+#[derive(Component)]
+struct Player {
+    movement_speed: f32,
+    position: Vec3,
+}
+
 fn animate_sprite(
     time: Res<Time>,
     mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut Sprite)>,
@@ -65,12 +71,16 @@ fn setup(
         Transform::from_scale(Vec3::splat(6.0)),
         animation_indices,
         AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
+        Player {
+            movement_speed: 500.0f32,
+            position: Vec3::new(0.0, 0.0, 0.0),
+        }
     ));
 }
 
 fn player_movement_system(
     time: Res<Time>,
-    mut query: Query<(&mut Sprite, &mut Transform)>,
+    mut query: Query<(&mut Player, &mut Sprite, &mut Transform)>,
     input: Res<ButtonInput<KeyCode>>,
 
 ) {
@@ -78,7 +88,7 @@ fn player_movement_system(
         return;
     }
 
-    let (mut player, mut transform) = query.single_mut();
+    let (mut player, mut sprite, mut transform) = query.single_mut();
 
     let mut movement_x = 0.0;
     let mut movement_y = 0.0;
@@ -103,6 +113,7 @@ fn player_movement_system(
     let movement_distance_y = movement_y * 500.0 * time.delta_secs();
     transform.translation.y += movement_distance_y;
     transform.translation.x += movement_distance_x;
+    player.position = transform.translation;
 
     let extents = Vec3::from((BOUNDS / 2.0, 0.0));
     transform.translation = transform.translation.min(extents).max(-extents);
