@@ -6,11 +6,12 @@ use bevy_framepace::*;
 use bevy::prelude::*;
 
 use std::simd::f32x2;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bevy::color::palettes::css::RED;
 use bevy::input::common_conditions::input_pressed;
 use bevy::input::keyboard::Key::ColorF0Red;
 use bevy::prelude::*;
+use bevy::prelude::KeyCode::ArrowLeft;
 use bevy::reflect::Enum;
 use bevy::render::mesh::RectangleMeshBuilder;
 use bevy::render::render_resource::AsBindGroupShaderType;
@@ -39,6 +40,14 @@ pub enum Direction {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationState {
+    Attack1,
+    Idle,
+    Run,
+    Hurt,
+}
+
 #[derive(Component)]
 struct AnimationIndices {
     first: usize,
@@ -53,6 +62,8 @@ struct Player {
     movement_speed: f32,
     position: Vec3,
     direction: Direction,
+    animation_state: AnimationState,
+    last_attack: u64,
 }
 
 #[derive(Component)]
@@ -66,6 +77,14 @@ fn animate_sprite(
     mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut Sprite, &mut Player)>,
 ) {
     for (indices, mut timer, mut sprite, mut player) in &mut query {
+        if player.animation_state == AnimationState::Idle {
+            Timer::from_seconds(0.3, TimerMode::Repeating);
+        } else if player.animation_state == AnimationState::Attack1 {
+            Timer::from_seconds(0.2, TimerMode::Repeating);
+        } else if player.animation_state == AnimationState::Run {
+            Timer::from_seconds(0.2, TimerMode::Repeating);
+        }
+
         timer.tick(time.delta());
 
         if timer.just_finished() {
@@ -115,33 +134,66 @@ fn setup(
             movement_speed: 500.0f32,
             position: Vec3::new(0.0, 0.0, 0.0),
             direction: Direction::Right,
+            animation_state: AnimationState::Idle,
+            last_attack: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
         }
     ));
 }
 
 fn player_movement_system(
     time: Res<Time>,
-    mut query: Query<(&mut Player, &mut Sprite, &mut Transform)>,
+    mut query: Query<(&mut Player, &mut Sprite, &mut Transform, &mut AnimationIndices)>,
     input: Res<ButtonInput<KeyCode>>,
-
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
+    let texture = asset_server.load("FREE_Samurai 2D Pixel Art v1.2/Sprites/RUN.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::splat(96), 16, 1, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+
     if query.iter().is_empty() {
         return;
     }
 
-    let (mut player, mut sprite, mut transform) = query.single_mut();
+    let (mut player, mut sprite, mut transform, mut indices) = query.single_mut();
 
     let mut movement_x = 0.0;
     let mut movement_y = 0.0;
 
-    if input.pressed(KeyCode::ArrowLeft) {
-        movement_x -= 1.0;
-        player.direction = Direction::Left;
+    if player.animation_state == AnimationState::Attack1 {
+        return;
     }
 
     if input.pressed(KeyCode::ArrowRight) {
         movement_x += 1.0;
         player.direction = Direction::Right;
+
+        if player.animation_state != AnimationState::Run {
+            sprite.image = texture;
+            sprite.texture_atlas = Some(TextureAtlas {
+                layout: texture_atlas_layout,
+                index: 0,
+                ..default()
+            });
+            indices.first = 0;
+            indices.last = 15;
+            player.animation_state = AnimationState::Run;
+        }
+    } else if input.pressed(KeyCode::ArrowLeft) {
+        movement_x -= 1.0;
+        player.direction = Direction::Left;
+
+        if player.animation_state != AnimationState::Run {
+            sprite.image = texture;
+            sprite.texture_atlas = Some(TextureAtlas {
+                layout: texture_atlas_layout,
+                index: 0,
+                ..default()
+            });
+            indices.first = 0;
+            indices.last = 15;
+            player.animation_state = AnimationState::Run;
+        }
     }
 
     if input.pressed(KeyCode::ArrowUp) {
@@ -150,6 +202,22 @@ fn player_movement_system(
 
     if input.pressed(KeyCode::ArrowDown) {
         movement_y -= 1.0;
+    }
+
+    if !(input.pressed(KeyCode::ArrowRight) || input.pressed(ArrowLeft)) && player.animation_state != AnimationState::Idle {
+        let texture = asset_server.load("FREE_Samurai 2D Pixel Art v1.2/Sprites/IDLE.png");
+        let layout = TextureAtlasLayout::from_grid(UVec2::splat(96), 10, 1, None, None);
+        let texture_atlas_layout = texture_atlas_layouts.add(layout);
+
+        sprite.image = texture;
+        sprite.texture_atlas = Some(TextureAtlas {
+            layout: texture_atlas_layout,
+            ..default()
+        });
+        indices.first = 0;
+        indices.last = 9;
+
+        player.animation_state = AnimationState::Idle;
     }
 
     let movement_distance_x = movement_x * 500.0 * time.delta_secs();
@@ -182,22 +250,41 @@ fn player_attack_system(
 
     let (mut player, mut sprite, mut transform, mut indices) = query.single_mut();
 
-    if input.pressed(KeyCode::KeyE) {
+    if input.pressed(KeyCode::KeyE) && SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() - player.last_attack >= 1 {
         let color: Color = bevy::prelude::Color::from(RED);
         let rect = meshes.add(Rectangle::new(96.0, 96.0));
 
         commands.spawn((
             Mesh2d(rect),
-            MeshMaterial2d(materials.add(color)),
+            //MeshMaterial2d(materials.add(color)),
             Transform::from_xyz(transform.translation.x + 96.0/2.0, transform.translation.y - 96.0/2.0, 0.0),
         ));
 
         sprite.image = texture;
         sprite.texture_atlas = Some(TextureAtlas {
             layout: texture_atlas_layout,
+            index: 3,
             ..default()
         });
+        indices.first = 0;
         indices.last = 5;
+
+        player.animation_state = AnimationState::Attack1;
+        player.last_attack = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    } else if player.animation_state == AnimationState::Attack1 && sprite.clone().texture_atlas.unwrap().index == 5 {
+        let texture = asset_server.load("FREE_Samurai 2D Pixel Art v1.2/Sprites/IDLE.png");
+        let layout = TextureAtlasLayout::from_grid(UVec2::splat(96), 10, 1, None, None);
+        let texture_atlas_layout = texture_atlas_layouts.add(layout);
+
+        sprite.image = texture;
+        sprite.texture_atlas = Some(TextureAtlas {
+            layout: texture_atlas_layout,
+            ..default()
+        });
+        indices.first = 0;
+        indices.last = 9;
+
+        player.animation_state = AnimationState::Idle;
     }
 }
 
