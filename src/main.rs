@@ -31,6 +31,8 @@ fn main() {
         .add_systems(Update, player_movement_system)
         .add_systems(Update, player_attack_system)
         .add_systems(Update, remove_tmp_components)
+        .add_systems(Update, enemy_movement_system)
+        .add_systems(Update, animate_enemy)
         .run();
 }
 
@@ -72,6 +74,15 @@ struct SwoardHitbox {
     rect: Rectangle,
 }
 
+#[derive(Component)]
+struct StdEnemy {
+    movement_speed: f32,
+    position: Vec3,
+    direction: Direction,
+    animation_state: AnimationState,
+    last_attack: u64,
+}
+
 fn animate_sprite(
     time: Res<Time>,
     mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut Sprite, &mut Player)>,
@@ -82,7 +93,7 @@ fn animate_sprite(
         } else if player.animation_state == AnimationState::Attack1 {
             Timer::from_seconds(0.2, TimerMode::Repeating);
         } else if player.animation_state == AnimationState::Run {
-            Timer::from_seconds(0.2, TimerMode::Repeating);
+            Timer::from_seconds(0.3, TimerMode::Repeating);
         }
 
         timer.tick(time.delta());
@@ -98,6 +109,43 @@ fn animate_sprite(
         }
 
         if player.direction == Direction::Left {
+            sprite.flip_x = true;
+        } else {
+            sprite.flip_x = false;
+        }
+    }
+}
+
+fn animate_enemy(
+    time: Res<Time>,
+    mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut Sprite, &mut StdEnemy)>,
+) {
+    if query.iter().is_empty() {
+        return;
+    }
+
+    for (indices, mut timer, mut sprite, mut enemy) in &mut query {
+        if enemy.animation_state == AnimationState::Idle {
+            Timer::from_seconds(0.3, TimerMode::Repeating);
+        } else if enemy.animation_state == AnimationState::Attack1 {
+            Timer::from_seconds(0.2, TimerMode::Repeating);
+        } else if enemy.animation_state == AnimationState::Run {
+            Timer::from_seconds(0.3, TimerMode::Repeating);
+        }
+
+        timer.tick(time.delta());
+
+        if timer.just_finished() {
+            if let Some(atlas) = &mut sprite.texture_atlas {
+                atlas.index = if atlas.index == indices.last {
+                    indices.first
+                } else {
+                    atlas.index + 1
+                };
+            }
+        }
+
+        if enemy.direction == Direction::Left {
             sprite.flip_x = true;
         } else {
             sprite.flip_x = false;
@@ -138,6 +186,138 @@ fn setup(
             last_attack: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
         }
     ));
+    setup_enemy(commands, asset_server, texture_atlas_layouts);
+}
+
+fn setup_enemy(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let texture = asset_server.load("FreeNinja/YellowNinja/yellowNinja - idle.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::splat(128), 8, 1, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+    // Use only the subset of sprites in the sheet that make up the run animation
+    let animation_indices = AnimationIndices { first: 0, last: 7 };
+
+    commands.spawn((
+        Sprite::from_atlas_image(
+            texture,
+            TextureAtlas {
+                layout: texture_atlas_layout,
+                index: animation_indices.first,
+            },
+        ),
+        Transform::from_scale(Vec3::splat(3.0)),
+        animation_indices,
+        AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
+        StdEnemy {
+            movement_speed: 500.0f32,
+            position: Vec3::new(200.0, 0.0, 0.0),
+            direction: Direction::Left,
+            animation_state: AnimationState::Idle,
+            last_attack: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        }
+    ));
+}
+
+fn enemy_movement_system(
+    time: Res<Time>,
+    mut query: Query<(&mut StdEnemy, &mut Sprite, &mut Transform, &mut AnimationIndices)>,
+    mut player_query: Query<(&mut Player)>,
+    input: Res<ButtonInput<KeyCode>>,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let texture = asset_server.load("FreeNinja/YellowNinja/yellowNinja - walk.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::splat(128), 10, 1, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+
+    if query.iter().is_empty() {
+        return;
+    }
+
+    if player_query.iter().is_empty() {
+        return;
+    }
+
+    let mut player = player_query.single_mut();
+
+    let (mut enemy, mut sprite, mut transform, mut indices) = query.single_mut();
+
+    let mut movement_x = 0.0;
+    let mut movement_y = 0.0;
+
+    if enemy.animation_state == AnimationState::Attack1 {
+        return;
+    }
+
+    if player.position.x > enemy.position.x {
+        /*if (enemy.position.x + player.position.x) < 0.25 {
+            enemy.direction = Direction::Right;
+            return;
+        }*/
+
+        movement_x += 1.0;
+        enemy.direction = Direction::Right;
+
+        if enemy.animation_state != AnimationState::Run {
+            sprite.image = texture;
+            sprite.texture_atlas = Some(TextureAtlas {
+                layout: texture_atlas_layout,
+                index: 0,
+                ..default()
+            });
+            indices.first = 0;
+            indices.last = 9;
+            enemy.animation_state = AnimationState::Run;
+        }
+    } else if player.position.x < enemy.position.x {
+        /*if (player.position.x + enemy.position.x) > 0.25 {
+            enemy.direction = Direction::Left;
+            return;
+        }*/
+
+        movement_x -= 1.0;
+        enemy.direction = Direction::Left;
+
+        if enemy.animation_state != AnimationState::Run {
+            sprite.image = texture;
+            sprite.texture_atlas = Some(TextureAtlas {
+                layout: texture_atlas_layout,
+                index: 0,
+                ..default()
+            });
+            indices.first = 0;
+            indices.last = 9;
+            enemy.animation_state = AnimationState::Run;
+        }
+    }
+
+    if !(player.position.x < enemy.position.x || player.position.x > enemy.position.x) && enemy.animation_state != AnimationState::Idle {
+        let texture = asset_server.load("FreeNinja/YellowNinja/yellowNinja - idle.png");
+        let layout = TextureAtlasLayout::from_grid(UVec2::splat(128), 8, 1, None, None);
+        let texture_atlas_layout = texture_atlas_layouts.add(layout);
+
+        sprite.image = texture;
+        sprite.texture_atlas = Some(TextureAtlas {
+            layout: texture_atlas_layout,
+            ..default()
+        });
+        indices.first = 0;
+        indices.last = 7;
+
+        enemy.animation_state = AnimationState::Idle;
+    }
+
+    let movement_distance_x = movement_x * 250.0 * time.delta_secs();
+    let movement_distance_y = movement_y * 250.0 * time.delta_secs();
+    transform.translation.y += movement_distance_y;
+    transform.translation.x += movement_distance_x;
+    enemy.position = transform.translation;
+
+    let extents = Vec3::from((BOUNDS / 2.0, 0.0));
+    transform.translation = transform.translation.min(extents).max(-extents);
 }
 
 fn player_movement_system(
